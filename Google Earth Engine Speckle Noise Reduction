@@ -1,0 +1,68 @@
+var sentinel1 = ee.ImageCollection('COPERNICUS/S1_GRD');
+var poly = ee.Geometry.Polygon(
+        [[[-95.83648681640625, 29.561512529746743],
+          [-95.042724609375, 29.57345707301757],
+          [-95.02899169921875, 30.099989515377835],
+          [-95.82275390625, 30.10711788709236]]]);
+var spatialFiltered = sentinel1.filter(ee.Filter.eq('instrumentMode', 'IW')).filterBounds(poly)
+                               .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+                               .select('VV');
+var image = spatialFiltered.filterDate('2017-08-25', '2017-09-05').mosaic().clip(poly);
+print (image);
+
+//Extended Directional Smoothing
+function eds(image) {
+  // Create a list of weights for a 3x3 kernel.
+  var dir1 = ee.List([[0, 0, 0], [0.5, 0, 0.5], [0, 0, 0]]);
+  var dir2 = ee.List([[0, 0.5, 0], [0, 0, 0], [0, 0.5, 0]]);
+  var dir3 = ee.List([[0, 0, 0.5], [0, 0, 0], [0.5, 0, 0]]);
+  var dir4 = ee.List([[0.5, 0, 0], [0, 0, 0], [0, 0, 0.5]]);
+  //Convolve directional kernels with the image
+  var d1 = image.convolve(ee.Kernel.fixed(3, 3, dir1, -1, -1));
+  var d2 = image.convolve(ee.Kernel.fixed(3, 3, dir2, -1, -1));
+  var d3 = image.convolve(ee.Kernel.fixed(3, 3, dir3, -1, -1));
+  var d4 = image.convolve(ee.Kernel.fixed(3, 3, dir4, -1, -1));
+  //Absolute value of the difference from convolved image with original values
+  var D1=(d1.subtract(image)).abs();
+  var D2=(d2.subtract(image)).abs();
+  var D3=(d3.subtract(image)).abs();
+  var D4=(d4.subtract(image)).abs();
+  //Pick min pixel value based on abs difference(first input) using reducers
+  var Dd=ee.ImageCollection([[D1,d1],[D2,d2],[D3,d3],[D4,d4]]);
+  var reducer =ee.Reducer.min(2);
+  //Select the second input to the reducer
+  var v = Dd.reduce(reducer).select('min1');
+  return v;
+}
+
+
+
+function msd(denoised,original) {
+  var diff = denoised.subtract(original);
+  var sq= diff.pow(2);
+  var meanDict = sq.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: poly,
+  scale: 20 ,
+  bestEffort:true
+  });
+  return meanDict;
+
+}
+
+//plane smoothing to remove speckle noise
+var smooth = ee.Image(image.focal_median(100, 'circle', 'meters'));
+var image_spk = eds(image);
+
+
+print (image_spk);
+Map.centerObject(poly, 10);
+
+Map.addLayer(image,{min:-30,max:30},'sentinel 1 raw');
+Map.addLayer(smooth,{min:-30,max:30},'sentinel 1 smooth');
+Map.addLayer(image_spk,{min:-30,max:30},'sentinel 1 EDS');
+
+var msd1=msd(smooth,image);
+print (msd1);
+var msd2=msd(image_spk,image);
+print (msd2);
